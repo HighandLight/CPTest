@@ -1,0 +1,58 @@
+spring:
+  application:
+    name: CPTest
+  datasource:
+    url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${DB_NAME:hikari_test}?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC
+    username: ${DB_USER:root}
+    password: ${DB_PASS}
+    hikari:
+      maximum-pool-size: ${HIKARI_MAX_POOL_SIZE:10}
+      minimum-idle: ${HIKARI_MIN_IDLE:5}
+
+      #타임아웃
+      connection-timeout: ${HIKARI_CONNECTION_TIMEOUT:30000}
+      # 유휴 커넥션 제거까지 대기 시간
+      idle-timeout: 600000
+      # 커넥션 최대 수명
+      max-lifetime: 1800000
+
+      # Leak Detection
+      # 0 = 비활성화. 실험 시 2000(2초)으로 변경
+      leak-detection-threshold: ${HIKARI_LEAK_DETECTION:0}
+
+      # KeepAlive
+      # MySQL wait_timeout 기본값인 8시간보다 짧게 설정
+      keepalive-time: 120000
+
+      pool-name: HikariPool-Experiment
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+        dialect: org.hibernate.dialect.MySQLDialect
+
+server:
+  port: 8080
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus,metrics,info
+  endpoint:
+    health:
+      show-details: always
+  metrics:
+    tags:
+      pod: ${POD_NAME:local}
+      env: ${ENV:local}
+
+logging:
+  level:
+    com.zaxxer.hikari: DEBUG       # HikariCP 커넥션 풀 상세 로그
+    com.zaxxer.hikari.pool: DEBUG
+    com.experiment.hikari: INFO
