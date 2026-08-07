@@ -1,0 +1,9 @@
+- job_name: 'hikari-ec2-single'
+  static_configs:
+    - targets: ['3.39.255.115:8080']
+      labels:
+        env: 'ec2-single'
+  metrics_path: '/actuator/prometheus'
+  scrape_interval: 15s
+
+
