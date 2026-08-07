@@ -6,4 +6,40 @@
   metrics_path: '/actuator/prometheus'
   scrape_interval: 15s
 
+- job_name: 'hikari-k8s-pods'
+  kubernetes_sd_configs:
+    - role: pod
+      namespaces:
+        names: ['default']
+  relabel_configs:
+    # prometheus.io/scrape: "true"인 Pod만
+    - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+      action: keep
+      regex: "true"
 
+    # prometheus.io/path annotation을 메트릭 경로로 사용
+    - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+      action: replace
+      target_label: __metrics_path__
+      regex: (.+)
+
+    #  prometheus.io/port annotation으로 수집 포트 변경
+    - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+      action: replace
+      regex: ([^:]+)(?::\d+)?;(\d+)
+      replacement: $1:$2
+      target_label: __address__
+
+    # app=hikari-experiment 라벨이 붙은 Pod만 남김
+    - source_labels: [__meta_kubernetes_pod_label_app]
+      action: keep
+      regex: hikari-experiment
+    # kubernetes의 시나리오 라벨을 Prometheus 라벨로 복사
+    - source_labels: [__meta_kubernetes_pod_label_scenario]
+      target_label: scenario
+    # pod 이름을 pod 라벨로 저장
+    - source_labels: [__meta_kubernetes_pod_name]
+      target_label: pod
+    # Namespace 이름을 namespace 라벨로 저장
+    - source_labels: [__meta_kubernetes_namespace]
+      target_label: namespace
