@@ -1,0 +1,172 @@
+name: Deploy HikariCP Experiment
+
+on:
+  push:
+    branches: [ main ]
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  IMAGE: ${{ secrets.ECR_REPOSITORY }}:${{ github.sha }}
+
+jobs:
+
+  # 빌드 & ECR push
+
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Build with Gradle
+        run: ./gradlew bootJar
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build & push Docker image
+        run: |
+          echo "IMAGE: ${{ env.IMAGE }}"
+          docker build -t "${{ env.IMAGE }}" .
+          docker push "${{ env.IMAGE }}"
+
+    #  EC2 단일 인스턴스 배포
+
+  deploy-ec2:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get ECR login password
+        id: ecr
+        run: |
+          echo "password=$(aws ecr get-login-password --region ${{ env.AWS_REGION }})" >> $GITHUB_OUTPUT
+
+      - name: Deploy to EC2 via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          envs: ECR_PASSWORD,ECR_REPOSITORY,IMAGE
+          script: |
+            echo "$ECR_PASSWORD" \
+              | docker login --username AWS --password-stdin $ECR_REPOSITORY
+
+            docker pull $IMAGE
+
+            docker stop hikari-app 2>/dev/null || true
+            docker rm   hikari-app 2>/dev/null || true
+
+            docker run -d \
+              --name hikari-app \
+              --restart always \
+              -p 8080:8080 \
+              -e DB_HOST=${{ secrets.DB_HOST }} \
+              -e DB_PASS=${{ secrets.DB_PASS }} \
+              -e HIKARI_MAX_POOL_SIZE=10 \
+              -e ENV=ec2-single \
+              -e POD_NAME=$(hostname) \
+              $IMAGE
+        env:
+          ECR_PASSWORD: ${{ steps.ecr.outputs.password }}
+          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+          IMAGE: ${{ env.IMAGE }}
+
+  # k8s Fixed Replicas 배포
+
+  deploy-k8s-fixed:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --name ${{ secrets.EKS_CLUSTER_NAME }} \
+            --region ${{ env.AWS_REGION }}
+
+      - name: Create DB secret (idempotent)
+        run: |
+          kubectl create secret generic mysql-secret \
+            --from-literal=username=root \
+            --from-literal=password=${{ secrets.DB_PASS }} \
+            --from-literal=host=${{ secrets.DB_HOST }} \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Apply deployment & update image
+        run: |
+          echo "Deploying: ${{ env.IMAGE }}"
+          sed -i "s|hikari-experiment:latest|${{ env.IMAGE }}|g" k8s/deployment-fixed.yaml
+          kubectl apply -f k8s/deployment-fixed.yaml
+          kubectl rollout status deployment/hikari-experiment-fixed --timeout=120s
+
+  # k8s + HPA 배포
+  deploy-k8s-hpa:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --name ${{ secrets.EKS_CLUSTER_NAME }} \
+            --region ${{ env.AWS_REGION }}
+
+      - name: Create DB secret (idempotent)
+        run: |
+          kubectl create secret generic mysql-secret \
+            --from-literal=username=root \
+            --from-literal=password=${{ secrets.DB_PASS }} \
+            --from-literal=host=${{ secrets.DB_HOST }} \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Apply deployment, HPA & update image
+        run: |
+          echo "Deploying: ${{ env.IMAGE }}"
+          sed -i "s|hikari-experiment:latest|${{ env.IMAGE }}|g" k8s/deployment-hpa.yaml
+          kubectl apply -f k8s/deployment-hpa.yaml
+          kubectl apply -f k8s/hpa.yaml
+          kubectl rollout status deployment/hikari-experiment-hpa --timeout=120s

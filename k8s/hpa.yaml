@@ -1,0 +1,31 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: hikari-experiment-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: hikari-experiment-hpa
+  minReplicas: 2
+  maxReplicas: 10                    # maxReplicas × poolSize(10) = 100 → DB max_connections 주의해야..
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 50     # CPU 50% 초과-> 스케일아웃
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 15 # 빠른 스케일아웃 (for 실험 관측 용이)
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 15
+    scaleDown:
+      stabilizationWindowSeconds: 60 # 스케일인은 천천히 되도록.
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 30

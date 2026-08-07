@@ -1,0 +1,77 @@
+# 환경 3: k8s + HPA
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hikari-experiment-hpa
+  labels:
+    app: hikari-experiment
+    scenario: hpa
+spec:
+  replicas: 2                        # HPA가 관리하므로, 초기값만 지정
+  selector:
+    matchLabels:
+      app: hikari-experiment
+      scenario: hpa
+  template:
+    metadata:
+      labels:
+        app: hikari-experiment
+        scenario: hpa
+    spec:
+      containers:
+        - name: hikari-experiment
+          image: hikari-experiment:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: ENV
+              value: "k8s-hpa"
+            - name: DB_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: host
+            - name: DB_NAME
+              value: "hikari_test"
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: username
+            - name: DB_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: password
+            # 실험변수
+            - name: HIKARI_MAX_POOL_SIZE
+              value: "10"
+            - name: HIKARI_CONNECTION_TIMEOUT
+              value: "30000"
+            - name: HIKARI_LEAK_DETECTION
+              value: "0"
+          resources:
+            requests:
+              cpu: 200m              # HPA CPU 기준의 분모
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
